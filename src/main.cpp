@@ -26,7 +26,7 @@
 // TODO   - Set LCD brightness
 
 // General defines
-#define sw_version               "v0.1.0"
+#define sw_version               "v0.2.0"
 #define TFT_BACKGND              TFT_BLACK
 #define reduce_bright_hrs_start  19  // Reduce LED and LCD brightness starting at 7pm
 #define reduce_bright_hrs_finish 7   // Increast LED and LCD brightness starting at 7am
@@ -184,7 +184,7 @@ enum {
   display_hist_raw,
   display_hist_minute,
   display_hist_hour,
-  display_settings
+  display_settings,
 };
 uint8_t display_state = display_tem_hum;
 bool display_init = false;
@@ -264,22 +264,22 @@ void loop(void) {
   M5.update();  // check touch buttons
 
   // Indicate calibration mode will be entered while BtnB is being held
-  if (M5.BtnB.isHolding()) {
+  if (M5.BtnC.isHolding()) {
+    display_co2_effect("Hold to Calibrate", TFT_CYAN);
+  } else
+    co2_display.update();
 
-  }
-
-  // Enter calibration mode after BtnB held for 3 seconds
-  if (M5.BtnB.pressedFor(3000)) {
-    scd_x_forced_cal(425);  // We just assume outdoor "fresh air" is 425 ppm, it will be pretty close
-    display_state = display_tem_hum;
-    display_init = true;
-  }
-
-  co2_display.update();
   clock_display.update();
   batt_display.update();
   co2_history.update();
   // TODO schedule SGP-30 baseline read and store to ESP32 EEPROM once per hour
+
+  // Enter calibration mode after BtnB held for 3 seconds
+  if (M5.BtnC.pressedFor(3000)) {
+    scd_x_forced_cal(425);  // We just assume outdoor "fresh air" is 425 ppm, it will be pretty close
+    display_state = display_tem_hum;
+    display_init = true;
+  }
 
   // Connect to WiFi to sync ESP32's RTC to internet NTP sever
   if (M5.BtnA.pressedFor(1000)) {
@@ -298,13 +298,14 @@ void loop(void) {
   // Check for user change display type
   auto td = M5.Touch.getDetail();
   if (td.wasPressed()) {
-    display_init = true;
-    if (td.x > 160) {
+    if (td.x > lcd_width / 2 && td.y < lcd_height / 2) {
+      display_init = true;
       if (display_state == display_settings)
         display_state = display_tem_hum;
       else
         display_state++;
-    } else if (td.x <= 160) {
+    } else if (td.x <= lcd_width / 2 && td.y < lcd_height / 2) {
+      display_init = true;
       display_state = display_tem_hum;
     }
   }
@@ -398,9 +399,9 @@ void main_display(void) {
       if (display_init) {
         display_init = false;
         M5.Lcd.clear();
-        M5.Lcd.drawString("Circular Gauge", lcd_width / 2, 30);
         M5.Lcd.setTextDatum(top_centre);
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Lcd.drawString("Circular Gauge", lcd_width / 2, 30);
       }
       break;
 
