@@ -132,6 +132,14 @@
 #define co2_spr_title_x 3    // X coordinates of co2 title
 #define co2_spr_title_y 3    // X coordinates of co2 title
 
+// Circular gauge pointer
+#define gauge_ptr_spr_w 20
+#define gauge_ptr_spr_h 80
+#define rad_1           100
+#define rad_2           130
+#define arc_x           (lcd_width / 2)
+#define arc_y           200
+
 // Function prototypes
 void start_co2_sensor(bool);
 void display_time(void);
@@ -170,6 +178,7 @@ m5::rtc_time_t RTCtime;
 m5::rtc_date_t RTCdate;
 M5Canvas batt_sprite(&M5.Lcd);                        // Sprite for battery icon and percentage text
 M5Canvas co2_hist_sprite(&M5.Lcd);                    // Sprite for CO2 history bargraph
+M5Canvas gauge_pointer(&M5.Lcd);                      // Sprite for circular gauge triangle pointer
 RunningAverage co2_raw_hist(co2_raw_hist_pts);        // Circular buffer for raw CO2 samples
 RunningAverage co2_minute_hist(co2_minute_hist_pts);  // Circular buffer for minute CO2 samples
 RunningAverage co2_hour_hist(co2_hour_hist_pts);      // Circular buffer for hour CO2 samples
@@ -214,6 +223,20 @@ void setup(void) {
 
   // Create CO2 history bargraph sprite
   co2_hist_sprite.createSprite(co2_hist_spr_w, co2_hist_spr_h);
+
+  // Create gauge pointer sprite
+  gauge_pointer.createSprite(gauge_ptr_spr_w, gauge_ptr_spr_h);
+  gauge_pointer.fillSprite(TFT_DARKGRAY);
+  gauge_pointer.fillTriangle(0, 20, gauge_ptr_spr_w / 2, 0, gauge_ptr_spr_w, 20, TFT_WHITE);
+  // gauge_pointer.pushSprite(arc_x, arc_y - gauge_ptr_spr_h);
+  gauge_pointer.setPivot(gauge_ptr_spr_w / 2, gauge_ptr_spr_h);
+  gauge_pointer.pushRotateZoom(arc_x, arc_y - gauge_ptr_spr_h, 0);
+  
+  delay(2000);
+  gauge_pointer.pushRotateZoom(arc_x, arc_y - gauge_ptr_spr_h, 5);
+  // gauge_pointer.pushRotated(5);
+  while (true)
+    ;
 
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
@@ -275,7 +298,7 @@ void loop(void) {
   // TODO schedule SGP-30 baseline read and store to ESP32 EEPROM once per hour
 
   // Enter calibration mode after BtnB held for 3 seconds
-  if (M5.BtnC.pressedFor(3000)) {
+  if (M5.BtnC.pressedFor(5000)) {
     scd_x_forced_cal(425);  // We just assume outdoor "fresh air" is 425 ppm, it will be pretty close
     display_state = display_tem_hum;
     display_init = true;
@@ -401,7 +424,23 @@ void main_display(void) {
         M5.Lcd.clear();
         M5.Lcd.setTextDatum(top_centre);
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Lcd.setFont(&fonts::FreeSans18pt7b);
         M5.Lcd.drawString("Circular Gauge", lcd_width / 2, 30);
+        uint16_t start_angle = 180;
+        uint16_t end_angle = start_angle + 45;
+        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_GREEN);
+        start_angle += 45;
+        end_angle += 45;
+        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_YELLOW);
+        start_angle += 45;
+        end_angle += 45;
+        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_ORANGE);
+        start_angle += 45;
+        end_angle += 45;
+        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_RED);
+
+        // Draw gauge pointer
+        gauge_pointer.pushRotated(0);
       }
       break;
 
