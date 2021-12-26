@@ -86,10 +86,10 @@
 // Battery icon data
 #define batt_spr_x       0    // Battery sprite X location on LCD
 #define batt_spr_y       0    // Battery sprite Y location on LCD
-#define batt_spr_wdth    150  // Battery sprite width
+#define batt_spr_wdth    113  // Battery sprite width
 #define batt_spr_ht      20   // Battery sprite height
 #define batt_rect_width  30
-#define batt_rect_height 16
+#define batt_rect_height 14
 #define batt_button_wdth 4
 #define batt_button_ht   6
 
