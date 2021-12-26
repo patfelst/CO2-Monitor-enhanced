@@ -36,7 +36,7 @@
 #define lcd_brightness_pc_low    30
 #define gmt_offset               10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
 #define ntp_url                  "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
-#define temperature_offset       2.5             // Temperature offset for CO2 sensor based temperature sensor
+#define temperature_offset       8.0             // Temperature offset for CO2 sensor based temperature sensor
 #define altitude                 88              // altitude in metres used for CO2 sensor
 
 // RGB LED defines
@@ -499,11 +499,11 @@ void main_display(void) {
     M5.Lcd.setTextColor(TFT_ORANGE);
     M5.Lcd.setFont(&fonts::FreeSans12pt7b);
     if (display_state == dispaly_gauge) {
-    M5.Lcd.setTextDatum(bottom_centre);
+      M5.Lcd.setTextDatum(bottom_centre);
       M5.Lcd.drawString("SIM!", lcd_width / 2, lcd_height);
     } else
-    M5.Lcd.setTextDatum(top_centre);
-      M5.Lcd.drawString("SIM!", lcd_width / 2 + 20, time_txt_y);
+      M5.Lcd.setTextDatum(top_centre);
+    M5.Lcd.drawString("SIM!", lcd_width / 2 + 20, time_txt_y);
   }
 
   // Prepare to display CO2 history bargraph
@@ -1356,6 +1356,10 @@ void scd_x_forced_cal(uint16_t target_co2) {
   co2.factory_reset();
 #endif
 
+#if defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30
+  scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
+#endif
+
   Serial.printf("Put in CO2=%d ppm for 3 minutes, or press BtnA when ready.\n", target_co2);
   sprintf(txt, "Put in CO2=%d ppm 3 mins", target_co2);
   M5.Lcd.drawString(txt, x, y);
@@ -1427,10 +1431,6 @@ void scd_x_forced_cal(uint16_t target_co2) {
     delay(1);
   } while (!M5.BtnA.wasClicked());
   M5.Lcd.clear();
-
-#if defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30
-  scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
-#endif
 }
 
 /*
