@@ -36,8 +36,11 @@
 #define lcd_brightness_pc_low    30
 #define gmt_offset               10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
 #define ntp_url                  "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
-#define temperature_offset       11.6            // Temperature offset for CO2 sensor based temperature sensor
-#define altitude                 88              // altitude in metres used for CO2 sensor
+
+// uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
+// #define UPDATE_SETTINGS
+#define temperature_offset 12.6  // Temperature offset for CO2 sensor based temperature sensor
+#define altitude           88    // altitude in metres used for CO2 sensor
 
 // RGB LED defines
 #define LED_COUNT 10
@@ -239,9 +242,9 @@ void setup(void) {
   // Start CO2 sensor and display sensor settings
   start_co2_sensor(true);
 
-  // #if defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30
-  //   scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
-  // #endif
+#if (defined UPDATE_SETTINGS) && (defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30)
+  scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
+#endif
 
   // If no sensor detected, so switch to simulation mode
   if (co2.simulate_co2) {
@@ -1602,14 +1605,14 @@ void draw_circular_gauge_scale(void) {
   gauge_ticks.clear(TFT_BLACK);
   gauge_ticks.drawRect(0, gauge_tick_spr_h - 3, 2, 3, TFT_LIGHTGREY);
   for (value = 0; value <= 2500; value += 5) {
-    if (value % 50 == 0) {
+    if (value % 125 == 0) {
       angle = 250 + ((220 * value) / 2500);
       gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
     }
   }
 
   // Draw scale MAJOR tick marks
-  gauge_ticks.drawRect(0, gauge_tick_spr_h - 10, 2, 10, TFT_LIGHTGREY);
+  gauge_ticks.drawRect(0, gauge_tick_spr_h - 8, 2, 8, TFT_LIGHTGREY);
   for (value = 0; value <= 2500; value += 50) {
     if (value % 250 == 0) {
       angle = 250 + ((220 * value) / 2500);
