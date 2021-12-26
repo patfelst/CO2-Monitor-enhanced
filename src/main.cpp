@@ -36,7 +36,7 @@
 #define lcd_brightness_pc_low    30
 #define gmt_offset               10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
 #define ntp_url                  "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
-#define temperature_offset       8.0             // Temperature offset for CO2 sensor based temperature sensor
+#define temperature_offset       11.6            // Temperature offset for CO2 sensor based temperature sensor
 #define altitude                 88              // altitude in metres used for CO2 sensor
 
 // RGB LED defines
@@ -162,6 +162,8 @@ void scd_x_forced_cal(uint16_t target_co2);
 void scd_x_settings(float temp_offs, uint16_t alt, bool ASC);
 void set_lcd_led_brightness(void);
 void sim_sensor_wrapper(void);
+void draw_circular_gauge_scale(void);
+void draw_circular_gauge_pointer(uint16_t percent);
 
 // Object creation
 CO2_generic co2;
@@ -198,111 +200,6 @@ bool display_init = false;
 
 /*
 -----------------
-  Draw a triangular pointer using rotated sprite on semi-circle gauge
-  Gauge value is passed in as a percentage:
-  0% = 250°
-  50% = 0°
-  100% = 110°
-  angle span = 220°
------------------
-*/
-void draw_circular_gauge_pointer(uint16_t percent) {
-  uint16_t angle = 0;
-  static uint16_t last_angle = 0;
-
-  // Erase the old pointer
-  gauge_pointer.clear(TFT_BLACK);
-  gauge_pointer.pushRotateZoom(arc_x, arc_y, last_angle, 1, 1);
-
-  // Draw the new pointer sprite
-  gauge_pointer.fillTriangle(0, 20, gauge_ptr_spr_w / 2, 0, gauge_ptr_spr_w, 20, TFT_WHITE);
-
-  // calculate the angle based on value in percent
-  if (percent > 100) percent = 100;
-  angle = 250 + ((220 * percent) / 100);
-
-  // if (angle >= 360) angle -= 360;
-
-  // Display the pointer sprite
-  gauge_pointer.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
-
-  // Remember the current angle to erase on next update
-  last_angle = angle;
-}
-
-/*
------------------
-  Draw a semi circular gauge scale for CO2
-  fillArc function defines 0° at display EAST, 180° at WEST, 270° at NORTH
-  0 = 160°
-  max = 20°
-  angle span = 220°
-
-  GREEN     CO2 <= 1000
-  YELLOW    CO2 1001-2000
-  RED       CO2 2001-5000
------------------
-*/
-void draw_circular_gauge_scale(void) {
-  uint16_t start_angle = 160;
-  uint16_t end_angle = 0;
-
-  // Start = 160°, End = 160 + (2/5 * 220) = 248°
-  end_angle = start_angle + (2000 * 220) / 5000;
-  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_DARKGREEN);
-  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
-
-  // Start = 248°, End = 248 + (2/5 * 220) = 336°
-  start_angle = end_angle;
-  end_angle = start_angle + (2000 * 220) / 5000;
-  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_ORANGE);
-  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
-
-  // Start = 336, End = 336 + (1/5 * 220) = 20° (i.e. 380°-360°)
-  start_angle = end_angle;
-  end_angle = start_angle + (1000 * 220) / 5000;
-  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_RED);
-  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
-
-  // Draw scale MINOR tick marks
-  uint16_t value = 0;
-  uint16_t angle = 0;
-  gauge_ticks.clear(TFT_BLACK);
-  gauge_ticks.drawRect(0, gauge_tick_spr_h - 3, 2, 3, TFT_LIGHTGREY);
-  for (value = 0; value <= 2500; value += 5) {
-    if (value % 50 == 0) {
-      angle = 250 + ((220 * value) / 2500);
-      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
-    }
-  }
-
-  // Draw scale MAJOR tick marks
-  gauge_ticks.drawRect(0, gauge_tick_spr_h - 10, 2, 10, TFT_LIGHTGREY);
-  for (value = 0; value <= 2500; value += 50) {
-    if (value % 250 == 0) {
-      angle = 250 + ((220 * value) / 2500);
-      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
-    }
-  }
-
-  M5.Lcd.setTextDatum(bottom_centre);
-  M5.Lcd.setFont(&fonts::FreeSans9pt7b);
-  // M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  // M5.Lcd.drawString("0", 15, lcd_height - 5);
-  // M5.Lcd.drawString("1", 95, 20);
-  // M5.Lcd.drawString("2", lcd_width - 10, 106);
-  // M5.Lcd.drawString("2.5", lcd_width - 15, lcd_height - 5);
-  M5.Lcd.setTextColor(TFT_WHITE);
-  M5.Lcd.drawString("0", 40, lcd_height - 35);
-  M5.Lcd.drawString("500", 50, 120);
-  M5.Lcd.drawString("1000", 115, 55);
-  M5.Lcd.drawString("1500", 205, 55);
-  M5.Lcd.drawString("2000", lcd_width - 45, 120);
-  M5.Lcd.drawString("2500", lcd_width - 40, lcd_height - 40);
-}
-
-/*
------------------
   setup(void)
 -----------------
 */
@@ -335,21 +232,16 @@ void setup(void) {
   gauge_ticks.createSprite(gauge_tick_spr_w, gauge_tick_spr_h);
   gauge_ticks.setPivot(1, rad_2 + gauge_tick_spr_h + 1);
 
-  // draw_circular_gauge_scale();
-  // int pc;
-  // for (pc = 0; pc < 105; pc += 5) {
-  //   draw_circular_gauge_pointer(pc);
-  //   delay(100);
-  // }
-  // while (true)
-  //   ;
-
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
   set_rgb_led(led_brightness_percent, CRGB::Fuchsia);
 
   // Start CO2 sensor and display sensor settings
   start_co2_sensor(true);
+
+  // #if defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30
+  //   scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
+  // #endif
 
   // If no sensor detected, so switch to simulation mode
   if (co2.simulate_co2) {
@@ -543,9 +435,10 @@ void main_display(void) {
 
     case display_settings:
       if (display_init) {
-        display_init = false;
         // Display co2 settings without starting the sensor
         start_co2_sensor(false);
+        display_init = true;
+        display_state = display_tem_hum;
       }
       break;
 
@@ -1356,10 +1249,6 @@ void scd_x_forced_cal(uint16_t target_co2) {
   co2.factory_reset();
 #endif
 
-#if defined SENSOR_IS_SCD41 || defined SENSOR_IS_SCD30
-  scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
-#endif
-
   Serial.printf("Put in CO2=%d ppm for 3 minutes, or press BtnA when ready.\n", target_co2);
   sprintf(txt, "Put in CO2=%d ppm 3 mins", target_co2);
   M5.Lcd.drawString(txt, x, y);
@@ -1600,7 +1489,7 @@ void start_co2_sensor(bool start_co2) {
       Serial.printf("Sensirion %s temperature offset is %.1f°C\n", co2_sensor_type_str, temp_offset);
       sprintf(txt, "%1.1f   C", temp_offset);
       M5.Lcd.drawString(txt, x, y);               // Temperature offset
-      M5.Lcd.drawCircle(x + 45, y, 4, TFT_CYAN);  // Degree symbol
+      M5.Lcd.drawCircle(x + 48, y, 4, TFT_CYAN);  // Degree symbol
     }
   }
 
@@ -1623,13 +1512,118 @@ void start_co2_sensor(bool start_co2) {
     M5.update();
     td = M5.Touch.getDetail();  // Read the buttons
     delay(10);
-  } while (!td.isPressed() && millis() < (timeout + 20000));
+  } while (!td.wasPressed() && millis() < (timeout + 20000));
 
-  M5.Lcd.clear();
+  // Clear out previous button press so don't go to next display
+  do {
+    M5.update();
+    td = M5.Touch.getDetail();  // Read the buttons
+    delay(10);
+  } while (td.wasPressed());
 
   Serial.printf("********* End of function %s() *********\n", __func__);
 }
 
 void sim_sensor_wrapper(void) {
   co2.sim_sensor();
+}
+
+/*
+-----------------
+  Draw a triangular pointer using rotated sprite on semi-circle gauge
+  Gauge value is passed in as a percentage:
+  0% = 250°
+  50% = 0°
+  100% = 110°
+  angle span = 220°
+-----------------
+*/
+void draw_circular_gauge_pointer(uint16_t percent) {
+  uint16_t angle = 0;
+  static uint16_t last_angle = 0;
+
+  // Erase the old pointer
+  gauge_pointer.clear(TFT_BLACK);
+  gauge_pointer.pushRotateZoom(arc_x, arc_y, last_angle, 1, 1);
+
+  // Draw the new pointer sprite
+  gauge_pointer.fillTriangle(0, 20, gauge_ptr_spr_w / 2, 0, gauge_ptr_spr_w, 20, TFT_WHITE);
+
+  // calculate the angle based on value in percent
+  if (percent > 100) percent = 100;
+  angle = 250 + ((220 * percent) / 100);
+
+  // if (angle >= 360) angle -= 360;
+
+  // Display the pointer sprite
+  gauge_pointer.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+
+  // Remember the current angle to erase on next update
+  last_angle = angle;
+}
+
+/*
+-----------------
+  Draw a semi circular gauge scale for CO2
+  fillArc function defines 0° at display EAST, 180° at WEST, 270° at NORTH
+  0 = 160°
+  max = 20°
+  angle span = 220°
+
+  GREEN     CO2 <= 1000
+  YELLOW    CO2 1001-2000
+  RED       CO2 2001-5000
+-----------------
+*/
+void draw_circular_gauge_scale(void) {
+  uint16_t start_angle = 160;
+  uint16_t end_angle = 0;
+
+  // Start = 160°, End = 160 + (2/5 * 220) = 248°
+  end_angle = start_angle + (2000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_DARKGREEN);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Start = 248°, End = 248 + (2/5 * 220) = 336°
+  start_angle = end_angle;
+  end_angle = start_angle + (2000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_ORANGE);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Start = 336, End = 336 + (1/5 * 220) = 20° (i.e. 380°-360°)
+  start_angle = end_angle;
+  end_angle = start_angle + (1000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_RED);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Draw scale MINOR tick marks
+  uint16_t value = 0;
+  uint16_t angle = 0;
+  gauge_ticks.clear(TFT_BLACK);
+  gauge_ticks.drawRect(0, gauge_tick_spr_h - 3, 2, 3, TFT_LIGHTGREY);
+  for (value = 0; value <= 2500; value += 5) {
+    if (value % 50 == 0) {
+      angle = 250 + ((220 * value) / 2500);
+      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+    }
+  }
+
+  // Draw scale MAJOR tick marks
+  gauge_ticks.drawRect(0, gauge_tick_spr_h - 10, 2, 10, TFT_LIGHTGREY);
+  for (value = 0; value <= 2500; value += 50) {
+    if (value % 250 == 0) {
+      angle = 250 + ((220 * value) / 2500);
+      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+    }
+  }
+
+  M5.Lcd.setTextDatum(bottom_centre);
+  M5.Lcd.setFont(&fonts::FreeSans9pt7b);
+  M5.Lcd.setTextColor(TFT_WHITE);
+  M5.Lcd.drawString("0", 40, lcd_height - 35);
+  M5.Lcd.drawString("500", 50, 120);
+  M5.Lcd.drawString("1000", 115, 55);
+  M5.Lcd.drawString("1500", 205, 55);
+  M5.Lcd.drawString("2000", lcd_width - 45, 120);
+  M5.Lcd.drawString("2500", lcd_width - 40, lcd_height - 40);
 }
