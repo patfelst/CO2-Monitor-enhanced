@@ -492,12 +492,18 @@ void main_display(void) {
     display_drawn_in_colour = true;
 #endif
 
+  M5.Lcd.setTextPadding(0);
+
   // Display SIM in title bar if in Simulate mode
   if (co2.simulate_co2) {
-    M5.Lcd.setTextDatum(top_centre);
-    M5.Lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+    M5.Lcd.setTextColor(TFT_ORANGE);
     M5.Lcd.setFont(&fonts::FreeSans12pt7b);
-    M5.Lcd.drawString("SIM!", lcd_width / 2 + 20, time_txt_y);
+    if (display_state == dispaly_gauge) {
+    M5.Lcd.setTextDatum(bottom_centre);
+      M5.Lcd.drawString("SIM!", lcd_width / 2, lcd_height);
+    } else
+    M5.Lcd.setTextDatum(top_centre);
+      M5.Lcd.drawString("SIM!", lcd_width / 2 + 20, time_txt_y);
   }
 
   // Prepare to display CO2 history bargraph
