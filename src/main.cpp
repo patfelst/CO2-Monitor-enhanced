@@ -26,7 +26,7 @@
 // TODO   - Set LCD brightness
 
 // General defines
-#define sw_version               "v0.2.0"
+#define sw_version               "v0.3.0"
 #define TFT_BACKGND              TFT_BLACK
 #define reduce_bright_hrs_start  19  // Reduce LED and LCD brightness starting at 7pm
 #define reduce_bright_hrs_finish 7   // Increast LED and LCD brightness starting at 7am
@@ -48,17 +48,12 @@
 #define lcd_height 240
 
 // CO2 value - text coordinates
-#define co2_value_align top_right
-#define co2_value_x     (co2_units_x - 53)
-#define co2_value_y     30
+#define co2_value_x (M5.Lcd.width() - 53)
+#define co2_value_y 30
 
 // CO2 units - text coordinates
-#define co2_units_colour TFT_LIGHTGRAY
-#define co2_units_align  top_right
-#define co2_units_x      M5.Lcd.width()
-#define co2_units_y      (co2_value_y + 3)
-#define ppm_units_x      co2_units_x
-#define ppm_units_y      (co2_units_y + 30)
+#define co2_units_x M5.Lcd.width()
+#define co2_units_y (co2_value_y + 3)
 
 // Temp and humidity - text coordinates
 #define temp_units_colour TFT_LIGHTGRAY
@@ -133,12 +128,14 @@
 #define co2_spr_title_y 3    // X coordinates of co2 title
 
 // Circular gauge pointer
-#define gauge_ptr_spr_w 20
-#define gauge_ptr_spr_h 80
-#define rad_1           100
-#define rad_2           130
-#define arc_x           (lcd_width / 2)
-#define arc_y           200
+#define gauge_ptr_spr_w  20
+#define gauge_ptr_spr_h  20
+#define gauge_tick_spr_w 3
+#define gauge_tick_spr_h 15
+#define rad_1            105
+#define rad_2            145
+#define arc_x            (lcd_width / 2)
+#define arc_y            160
 
 // Function prototypes
 void start_co2_sensor(bool);
@@ -178,7 +175,8 @@ m5::rtc_time_t RTCtime;
 m5::rtc_date_t RTCdate;
 M5Canvas batt_sprite(&M5.Lcd);                        // Sprite for battery icon and percentage text
 M5Canvas co2_hist_sprite(&M5.Lcd);                    // Sprite for CO2 history bargraph
-M5Canvas gauge_pointer(&M5.Lcd);                      // Sprite for circular gauge triangle pointer
+M5Canvas gauge_pointer(&M5.Lcd);                      // Sprite for semi circular gauge triangle pointer
+M5Canvas gauge_ticks(&M5.Lcd);                        // Sprite for semi circular gauge scale ticks
 RunningAverage co2_raw_hist(co2_raw_hist_pts);        // Circular buffer for raw CO2 samples
 RunningAverage co2_minute_hist(co2_minute_hist_pts);  // Circular buffer for minute CO2 samples
 RunningAverage co2_hour_hist(co2_hour_hist_pts);      // Circular buffer for hour CO2 samples
@@ -197,6 +195,111 @@ enum {
 };
 uint8_t display_state = display_tem_hum;
 bool display_init = false;
+
+/*
+-----------------
+  Draw a triangular pointer using rotated sprite on semi-circle gauge
+  Gauge value is passed in as a percentage:
+  0% = 250°
+  50% = 0°
+  100% = 110°
+  angle span = 220°
+-----------------
+*/
+void draw_circular_gauge_pointer(uint16_t percent) {
+  uint16_t angle = 0;
+  static uint16_t last_angle = 0;
+
+  // Erase the old pointer
+  gauge_pointer.clear(TFT_BLACK);
+  gauge_pointer.pushRotateZoom(arc_x, arc_y, last_angle, 1, 1);
+
+  // Draw the new pointer sprite
+  gauge_pointer.fillTriangle(0, 20, gauge_ptr_spr_w / 2, 0, gauge_ptr_spr_w, 20, TFT_WHITE);
+
+  // calculate the angle based on value in percent
+  if (percent > 100) percent = 100;
+  angle = 250 + ((220 * percent) / 100);
+
+  // if (angle >= 360) angle -= 360;
+
+  // Display the pointer sprite
+  gauge_pointer.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+
+  // Remember the current angle to erase on next update
+  last_angle = angle;
+}
+
+/*
+-----------------
+  Draw a semi circular gauge scale for CO2
+  fillArc function defines 0° at display EAST, 180° at WEST, 270° at NORTH
+  0 = 160°
+  max = 20°
+  angle span = 220°
+
+  GREEN     CO2 <= 1000
+  YELLOW    CO2 1001-2000
+  RED       CO2 2001-5000
+-----------------
+*/
+void draw_circular_gauge_scale(void) {
+  uint16_t start_angle = 160;
+  uint16_t end_angle = 0;
+
+  // Start = 160°, End = 160 + (2/5 * 220) = 248°
+  end_angle = start_angle + (2000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_DARKGREEN);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Start = 248°, End = 248 + (2/5 * 220) = 336°
+  start_angle = end_angle;
+  end_angle = start_angle + (2000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_ORANGE);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Start = 336, End = 336 + (1/5 * 220) = 20° (i.e. 380°-360°)
+  start_angle = end_angle;
+  end_angle = start_angle + (1000 * 220) / 5000;
+  M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_RED);
+  M5.Lcd.drawArc(arc_x, arc_y, rad_1 - 1, rad_2 + 1, start_angle, end_angle, TFT_DARKGREY);
+
+  // Draw scale MINOR tick marks
+  uint16_t value = 0;
+  uint16_t angle = 0;
+  gauge_ticks.clear(TFT_BLACK);
+  gauge_ticks.drawRect(0, gauge_tick_spr_h - 3, 2, 3, TFT_LIGHTGREY);
+  for (value = 0; value <= 2500; value += 5) {
+    if (value % 50 == 0) {
+      angle = 250 + ((220 * value) / 2500);
+      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+    }
+  }
+
+  // Draw scale MAJOR tick marks
+  gauge_ticks.drawRect(0, gauge_tick_spr_h - 10, 2, 10, TFT_LIGHTGREY);
+  for (value = 0; value <= 2500; value += 50) {
+    if (value % 250 == 0) {
+      angle = 250 + ((220 * value) / 2500);
+      gauge_ticks.pushRotateZoom(arc_x, arc_y, angle, 1, 1);
+    }
+  }
+
+  M5.Lcd.setTextDatum(bottom_centre);
+  M5.Lcd.setFont(&fonts::FreeSans9pt7b);
+  // M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  // M5.Lcd.drawString("0", 15, lcd_height - 5);
+  // M5.Lcd.drawString("1", 95, 20);
+  // M5.Lcd.drawString("2", lcd_width - 10, 106);
+  // M5.Lcd.drawString("2.5", lcd_width - 15, lcd_height - 5);
+  M5.Lcd.setTextColor(TFT_WHITE);
+  M5.Lcd.drawString("0", 40, lcd_height - 35);
+  M5.Lcd.drawString("500", 50, 120);
+  M5.Lcd.drawString("1000", 115, 55);
+  M5.Lcd.drawString("1500", 205, 55);
+  M5.Lcd.drawString("2000", lcd_width - 45, 120);
+  M5.Lcd.drawString("2500", lcd_width - 40, lcd_height - 40);
+}
 
 /*
 -----------------
@@ -224,19 +327,22 @@ void setup(void) {
   // Create CO2 history bargraph sprite
   co2_hist_sprite.createSprite(co2_hist_spr_w, co2_hist_spr_h);
 
-  // Create gauge pointer sprite
+  // Create semi circular gauge pointer sprite
   gauge_pointer.createSprite(gauge_ptr_spr_w, gauge_ptr_spr_h);
-  gauge_pointer.fillSprite(TFT_DARKGRAY);
-  gauge_pointer.fillTriangle(0, 20, gauge_ptr_spr_w / 2, 0, gauge_ptr_spr_w, 20, TFT_WHITE);
-  // gauge_pointer.pushSprite(arc_x, arc_y - gauge_ptr_spr_h);
-  gauge_pointer.setPivot(gauge_ptr_spr_w / 2, gauge_ptr_spr_h);
-  gauge_pointer.pushRotateZoom(arc_x, arc_y - gauge_ptr_spr_h, 0);
-  
-  delay(2000);
-  gauge_pointer.pushRotateZoom(arc_x, arc_y - gauge_ptr_spr_h, 5);
-  // gauge_pointer.pushRotated(5);
-  while (true)
-    ;
+  gauge_pointer.setPivot(gauge_ptr_spr_w / 2, rad_1 - 5);
+
+  // create semi circular gauge scale ticks sprite
+  gauge_ticks.createSprite(gauge_tick_spr_w, gauge_tick_spr_h);
+  gauge_ticks.setPivot(1, rad_2 + gauge_tick_spr_h + 1);
+
+  // draw_circular_gauge_scale();
+  // int pc;
+  // for (pc = 0; pc < 105; pc += 5) {
+  //   draw_circular_gauge_pointer(pc);
+  //   delay(100);
+  // }
+  // while (true)
+  //   ;
 
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
@@ -422,32 +528,16 @@ void main_display(void) {
       if (display_init) {
         display_init = false;
         M5.Lcd.clear();
-        M5.Lcd.setTextDatum(top_centre);
-        M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-        M5.Lcd.setFont(&fonts::FreeSans18pt7b);
-        M5.Lcd.drawString("Circular Gauge", lcd_width / 2, 30);
-        uint16_t start_angle = 180;
-        uint16_t end_angle = start_angle + 45;
-        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_GREEN);
-        start_angle += 45;
-        end_angle += 45;
-        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_YELLOW);
-        start_angle += 45;
-        end_angle += 45;
-        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_ORANGE);
-        start_angle += 45;
-        end_angle += 45;
-        M5.Lcd.fillArc(arc_x, arc_y, rad_1, rad_2, start_angle, end_angle, TFT_RED);
-
-        // Draw gauge pointer
-        gauge_pointer.pushRotated(0);
+        draw_circular_gauge_scale();
+        display_co2_units();
       }
+      display_co2_value(co2.co2_level, co2_lcd_colour);
+      draw_circular_gauge_pointer((co2.co2_level * 100) / 2500);
       break;
 
     case display_settings:
       if (display_init) {
         display_init = false;
-
         // Display co2 settings without starting the sensor
         start_co2_sensor(false);
       }
@@ -805,18 +895,31 @@ void display_temp_humid(float temp, float humid) {
 */
 void display_co2_value(uint16_t co2, int32_t colour) {
   char txt[30] = "";
-  M5.Lcd.setTextDatum(co2_value_align);
-  M5.Lcd.setFont(&DSEG7_Modern_Bold_60);
-  M5.Lcd.setTextPadding(185);
+  int32_t xx = 0;
+  int32_t yy = 0;
+
+  if (display_state == dispaly_gauge) {
+    M5.Lcd.setFont(&DSEG7_Modern_Regular_40);
+    M5.Lcd.setTextPadding(170);
+    M5.Lcd.setTextDatum(bottom_center);
+    xx = lcd_width / 2;
+    yy = lcd_height - 70;
+  } else {
+    M5.Lcd.setFont(&DSEG7_Modern_Bold_60);
+    M5.Lcd.setTextPadding(240);
+    M5.Lcd.setTextDatum(top_right);
+    xx = co2_value_x;
+    yy = co2_value_y;
+  }
 
   if (co2 == 0) {
     // Don't display zero values
     M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
-    M5.Lcd.drawString("NAN", co2_value_x, co2_value_y);
+    M5.Lcd.drawString("NAN", xx, yy);
   } else {
     M5.Lcd.setTextColor(colour, TFT_BLACK);
     sprintf(txt, "%d", co2);
-    M5.Lcd.drawString(txt, co2_value_x, co2_value_y);
+    M5.Lcd.drawString(txt, xx, yy);
   }
 }
 
@@ -826,12 +929,18 @@ void display_co2_value(uint16_t co2, int32_t colour) {
 -----------------
 */
 void display_co2_units() {
-  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
-  M5.Lcd.setTextDatum(co2_units_align);
   M5.Lcd.setTextPadding(0);
-  M5.Lcd.setTextColor(co2_units_colour, TFT_BLACK);
-  M5.Lcd.drawString("CO2", co2_units_x, co2_units_y);
-  M5.Lcd.drawString("ppm", ppm_units_x, ppm_units_y);
+  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
+  M5.Lcd.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+
+  if (display_state == dispaly_gauge) {
+    M5.Lcd.setTextDatum(bottom_center);
+    M5.Lcd.drawString("CO2 ppm", lcd_width / 2, lcd_height - 30);
+  } else {
+    M5.Lcd.setTextDatum(top_right);
+    M5.Lcd.drawString("CO2", co2_units_x, co2_units_y);
+    M5.Lcd.drawString("ppm", co2_units_x, co2_units_y + 30);
+  }
 }
 
 /*
@@ -1163,7 +1272,7 @@ void display_time(void) {
   M5.Lcd.setTextDatum(time_align);
   M5.Lcd.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
   M5.Lcd.setFont(&fonts::FreeSans12pt7b);
-  M5.Lcd.setTextPadding(105);
+  M5.Lcd.setTextPadding(96);
   // M5.Lcd.drawString(time_str, date_txt_x, date_txt_y);
 
   // Display time
