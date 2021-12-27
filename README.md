@@ -83,9 +83,11 @@ Shows a Sensirion SCD-30 sensor connected externally to the Core2 red "Port-A", 
 ![](images/CO2_sensor_7.jpg)
 
 ## SCD-41 external CO2 sensor
-Shows a Sensirion SCD-41 sensor connected externally to the Core2 red "Port-A", I2C is connected to SDA=32, SCL=33. Sensor mounted on rear of Core2.
+Shows a Sensirion SCD-41 sensor connected externally to the Core2 red "Port-A", I2C is connected to SDA=32, SCL=33. Sensor mounted on rear of Core2 using the Lego holes and a 3D printed adaptor bracket.
 
-![](images/CO2_sensor_1.jpg)
+![](images/CO2_sensor_12.jpg)
+
+![](images/CO2_sensor_13.jpg)
 
 ## SCD-41 internal CO2 sensor
 Shows a Sensirion SCD-41 sensor connected internally within a modified [M5Stack battery bottom](https://shop.m5stack.com/products/m5go-battery-bottom2-for-core2-only). I removed the LiPo battery from the base and used the space to fit the SCD-41. The I2C is connected to the black "Port-C" (normally intended for USART however I re-assigned the I2C to these pins) with SDA=14, SCL=13. This works ok except the CO2 sensor gets quite warm being in close proximity to the ESP32 and requires a temperature offset of 12.6°C.
