@@ -1,6 +1,8 @@
 # CO2 Monitor enhanced
 CO2 monitor that works with three different sensors, [SCD-30](https://au.mouser.com/ProductDetail/Sensirion/SCD30?qs=sGAEpiMZZMv0NwlthflBi416OFlovbRC0nuIF%252BcSLo4%3D), [SCD-41](https://www.adafruit.com/product/5190) and [SGP-30](https://www.adafruit.com/product/3709). I call it enhanced as compared to the prototype which only worked with the SCD-30, the code is structured as generic display code, and separate code for one of three different CO2 sensors, selected before compile.
 
+![](images/CO2_sensor_6.jpg)
+
 ---
 
 ## Background
@@ -11,7 +13,7 @@ CO2 monitor that works with three different sensors, [SCD-30](https://au.mouser.
 ![](images/CO2_sensor_10.png)
 
 ---
-## Software and hardware
+## Software and hardware overview
  Programmed with Arduino C++ on an [M5Stack Core2](https://shop.m5stack.com/collections/stack-series/products/m5stack-core2-esp32-iot-development-kit?variant=35960244109476) with ESP32 microcontroller. The development IDE is PlatformIO. Sensor type is selected pre-compile using #define "SENSOR_IS_XXXXX" where XXXXX is the sensor type. #defines are in file ["platformio.ini"](platformio.ini) file, e.g. "-D SENSOR_IS_SCD41". To make it easier to switch between sensors, I created three PlatformIO "environments", just select the one with the sensor you want, e.g. "[env:SCD41_Internal]" recompile and flash the ESP32. The environments are defined in "platformio.ini" and also contain the sensor I2C SCL and SDA pins, as well as the upload and monitor port details.
 
 ```ini
@@ -45,16 +47,17 @@ I experimented with different mounting and electrical connections for the CO2 se
 There are a number of different screens to visualise CO2 current value and history, just tap the top right hand corner of the Core2 touch screen to cycle between them. The graphics library is [LovyanGFX](https://github.com/lovyan03/LovyanGFX) by the very talented programmer [Lovyan03](https://github.com/lovyan03). Note that I used his [M5Unified](https://github.com/m5stack/M5Unified) library which is an alternative to the M5Stack library for the Core2 (and all other M5Stack products.). The M5Unified library includes LovyanGFX which is very similar to TFT_eSPI but faster and with more features. I make quite heavy use of the graphics library sprites, espectially for the semi-circular gauge which uses sprite rotation for the triangular pointer and to draw the tick marks for the gauge scale. Sprites are also used for the bargraph, and the battery icon.
 
 ---
+# Software
 
 ## Screen 1 - CO2, temperature and humidity
 Shows the CO2 level, and its effect on people as described above. At the top of the screen the LiPo battery charge level (%) and Time of day is displayed.
 
 ![](images/CO2_sensor_9.jpg)
 
-## Screen 2 (RHS) - Semi-circular gague.
-Triangular pointer indicates CO2 level on the gauge.
+## Screen 2 - Semi-circular gague.
+Triangular pointer indicates CO2 level on the gauge. Rotated sprites used for the triangle and gauge scale tick marks.
 
-![](images/CO2_sensor_6.jpg)
+![](images/CO2_sensor_11.jpg)
 
 ## Screen 3 - Bargraph history
 There's actually 3 bargraph history types. The one in the photo has one CO2 sample per bar (5 seconds / sample * 24 bars = 2 mins on width of screen). The next bargraph type is average of one minute of CO2 samples for each bar (30 bars = 30 minutes on width of screen). The final bargraph type is average of 60 minutes of CO2 samples for each bar (24 bars = 24 hours on width of screen).
@@ -71,7 +74,10 @@ Press and hold Button C (BtnC) for 5 seconds to enter calibration mode.
 
 ![](images/CO2_sensor_8.jpg)
 
- ## SCD-30 external CO2 sensor
+---
+# Hardware
+
+## SCD-30 external CO2 sensor
 Shows a Sensirion SCD-30 sensor connected externally to the Core2 red "Port-A", I2C is connected to SDA=32, SCL=33.
 
 ![](images/CO2_sensor_7.jpg)
