@@ -10,12 +10,9 @@
 #include "time.h"
 #include "wifi_credentials.h"
 
-// TODO make all the CO2 sensor read stuff a new class so can easily compile for either SCD-30 or SCD-41
-// TODO after a calibration, save the correction value to EEPROM and display it on splash screen
 // TODO Check scaling of bargraph
 // TODO Save 24-hour history to SD card
 // TODO make DST a menu selection saved to EEPROM so don't need to recompile when DST changes
-// TODO Use button to swap to history bargraph. History of max value and ave values reached for last 12 hours (swtich between max and ave with button)
 // TODO add MENU to:
 // TODO   - Calibrate in 1 of 2 methods: Automatic Self-Calibration (ASC) + Set Forced Recalibration value (FRC)
 // TODO   - Enter temperature offset
@@ -26,21 +23,19 @@
 // TODO   - Set LCD brightness
 
 // General defines
-#define sw_version               "v0.4.0"
-#define TFT_BACKGND              TFT_BLACK
-#define reduce_bright_hrs_start  19  // Reduce LED and LCD brightness starting at 7pm
-#define reduce_bright_hrs_finish 7   // Increast LED and LCD brightness starting at 7am
-#define led_brightness_pc_high   80
-#define led_brightness_pc_low    30
-#define lcd_brightness_pc_high   60
-#define lcd_brightness_pc_low    30
-#define gmt_offset               10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
-#define ntp_url                  "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
+#define sw_version            "v0.4.0"
+#define TFT_BACKGND           TFT_BLACK
+#define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
+#define led_brightness_pc_low 20
+#define lcd_brightness_low    30
+#define gmt_offset            10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
+#define ntp_url               "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
 
 // uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
 // #define UPDATE_SETTINGS
 #define temperature_offset 9.0  // Temperature offset for CO2 sensor based temperature sensor
-#define altitude           88    // altitude in metres used for CO2 sensor
+#define altitude           88   // altitude in metres used for CO2 sensor
+bool debug_mode = true;         // Set true to output some serial debug text
 
 // RGB LED defines
 #define LED_COUNT 10
@@ -155,7 +150,8 @@ void display_co2_value(uint16_t co2, int32_t colour);
 void display_co2_units();
 void display_temp_humid(float temp, float humid);
 void co2_to_colour(uint16_t co2, uint32_t& led_colour, int32_t& lcd_colour, char* txt);
-uint16_t read_ldr(void);
+uint16_t ldr_to_led_brightness_pc(void);
+uint16_t ldr_to_lcd_brightness_pc(void);
 void set_rgb_led(uint8_t brightness, uint32_t colour);
 void save_co2_history(void);
 void main_display(void);
@@ -167,7 +163,6 @@ void display_min_co2(float min);
 void display_wait_msg(const char* msg);
 void scd_x_forced_cal(uint16_t target_co2);
 void scd_x_settings(float temp_offs, uint16_t alt, bool ASC);
-void set_lcd_led_brightness(void);
 void sim_sensor_wrapper(void);
 void draw_circular_gauge_scale(void);
 void draw_circular_gauge_pointer(uint16_t percent);
@@ -189,9 +184,6 @@ M5Canvas gauge_ticks(&M5.Lcd);                        // Sprite for semi circula
 RunningAverage co2_raw_hist(co2_raw_hist_pts);        // Circular buffer for raw CO2 samples
 RunningAverage co2_minute_hist(co2_minute_hist_pts);  // Circular buffer for minute CO2 samples
 RunningAverage co2_hour_hist(co2_hour_hist_pts);      // Circular buffer for hour CO2 samples
-
-// Global variables
-uint8_t lcd_brightness_percent = lcd_brightness_pc_high;
 
 enum {
   display_tem_hum,
@@ -220,8 +212,16 @@ void setup(void) {
   cfg.external_rtc = false;      // default=false. use Unit RTC.
   cfg.led_brightness = 0;        // default= 0. Green LED brightness (0=off / 255=max) (※ not NeoPixel)
 
+  // Setup ADC for LDR light sensor
+  analogSetWidth(10);
+  analogSetAttenuation(ADC_11db);  // 11dB max is 2600mV
+
   M5.begin(cfg);
-  M5.Lcd.setBrightness((lcd_brightness_percent * 255) / 100);  // LCD to 60% brightness
+  M5.Lcd.setBrightness(ldr_to_lcd_brightness_pc());  // Core2 LCD backlight brightness
+
+  // Setup RGB LED
+  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
+  set_rgb_led(ldr_to_led_brightness_pc(), CRGB::Fuchsia);  // RGB LED brightness
 
   // Create battery icon sprite
   batt_sprite.createSprite(batt_spr_wdth, batt_spr_ht);
@@ -236,14 +236,6 @@ void setup(void) {
   // create semi circular gauge scale ticks sprite
   gauge_ticks.createSprite(gauge_tick_spr_w, gauge_tick_spr_h);
   gauge_ticks.setPivot(1, rad_2 + gauge_tick_spr_h + 1);
-
-  // Setup ADC for LDR light sensor
-  analogSetWidth(9);
-  analogSetAttenuation(ADC_11db);  // 11dB max is 2600mV
-
-  // Setup RGB LED
-  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
-  set_rgb_led(read_ldr(), CRGB::Fuchsia);
 
   auto spk_cfg = M5.Speaker.config();
   spk_cfg.sample_rate = 192000;  // M5 Unified default = 44,100
@@ -275,7 +267,7 @@ void setup(void) {
 
   // If no sensor detected, so switch to simulation mode
   if (co2.simulate_co2) {
-    Serial.printf("%s CO2 sensor NOT connected, switching to simulation mode\n", co2_sensor_type_str);
+    if (debug_mode) Serial.printf("%s CO2 sensor NOT connected, switching to simulation mode\n", co2_sensor_type_str);
     co2.co2_level = 400;
     co2.temperature = 20.0;
     co2.humidity = 25.0;
@@ -389,7 +381,8 @@ void main_display(void) {
 
   co2_to_colour(co2.co2_level, co2_led_colour, co2_lcd_colour, txt_msg);
   co2_lcd_colour2 = co2_lcd_colour;
-  set_rgb_led(read_ldr(), co2_led_colour);  // Neopixel RGB LED colour and 100% brightness
+  set_rgb_led(ldr_to_led_brightness_pc(), co2_led_colour);  // Neopixel RGB LED colour and brightness
+  M5.Lcd.setBrightness(ldr_to_lcd_brightness_pc());         // Core2 LCD backlight brightness
 
 #if defined SENSOR_IS_SGP30
   // Don't blink the co2 value as it updates at 1Hz
@@ -885,23 +878,13 @@ void display_co2_effect(const char* effect, int32_t colour) {
   M5.Lcd.drawString(effect, effect_txt_x, effect_txt_y);
 }
 
-void set_lcd_led_brightness(void) {
-  // Set RGB LED and LCD brightness based on time of day
-  if (RTCtime.hours >= reduce_bright_hrs_start || RTCtime.hours <= reduce_bright_hrs_finish) {
-    lcd_brightness_percent = lcd_brightness_pc_low;
-  } else {
-    lcd_brightness_percent = lcd_brightness_pc_high;
-  }
-  M5.Lcd.setBrightness((lcd_brightness_percent * 255) / 100);  // LCD to 60% brightness
-}
-
 /*
 -----------------
   Set the Neopixel RGB LED brightness in % and colour
 -----------------
 */
-void set_rgb_led(uint8_t brightness, uint32_t colour) {
-  FastLED.setBrightness((brightness * 255) / 100);
+void set_rgb_led(uint8_t brightness_pc, uint32_t colour) {
+  FastLED.setBrightness((brightness_pc * 255) / 100);
   // M5 Core2 base has x10 LEDs around the base
 
   // if (brightness <= led_brightness_pc_low) {
@@ -918,11 +901,30 @@ void set_rgb_led(uint8_t brightness, uint32_t colour) {
   Read LDR light sensor and convert to RGB LED brightness percent
 -----------------
 */
-uint16_t read_ldr(void) {
+uint16_t ldr_to_led_brightness_pc(void) {
   int16_t adc_value;
-  adc_value = analogRead(LDR_PIN);
-  adc_value = (adc_value * 100) / 512 + led_brightness_pc_low;
-  if (adc_value > 100) adc_value = 100;
+
+  adc_value = analogRead(LDR_PIN);  // Max value at 10-bit = 1024
+  if (debug_mode) Serial.printf("LED ADC=%d, ", adc_value);
+  adc_value = constrain(adc_value, 0, max_adc_value);
+  adc_value = map(adc_value, 0, max_adc_value, led_brightness_pc_low, 100);  // map(value, fromLow, fromHigh, toLow, toHigh)
+  if (debug_mode) Serial.printf("brightness %%=%d\n", adc_value);
+  return adc_value;
+}
+
+/*
+-----------------
+  Read LDR light sensor and convert to Core2 LCD brightness 0-255
+-----------------
+*/
+uint16_t ldr_to_lcd_brightness_pc(void) {
+  int16_t adc_value;
+
+  adc_value = analogRead(LDR_PIN);  // Max value at 10-bit = 1024
+  if (debug_mode) Serial.printf("LCD ADC=%d, ", adc_value);
+  adc_value = constrain(adc_value, 0, max_adc_value);
+  adc_value = map(adc_value, 0, max_adc_value, lcd_brightness_low, 255);  // map(value, fromLow, fromHigh, toLow, toHigh)
+  if (debug_mode) Serial.printf("brightness=%d\n", adc_value);
   return adc_value;
 }
 
@@ -985,7 +987,6 @@ void co2_to_colour(uint16_t co2, uint32_t& led_colour, int32_t& lcd_colour, char
 */
 void disp_batt_wrapper(void) {
   disp_batt_symbol(batt_spr_x, batt_spr_y, false);
-  set_lcd_led_brightness();  // Call this here as this wrapper is scheduled slowly
 }
 
 /*
@@ -1010,7 +1011,7 @@ void disp_batt_symbol(uint16_t batt_x, uint16_t batt_y, bool disp_volts) {
   batt_volt = M5.Power.Axp192.getBatteryVoltage();
   batt_percent = M5.Power.getBatteryLevel();
   batt_fill_length = (batt_percent * batt_rect_width) / 100;
-  // Serial.printf("BatVoltage= %.1f, BattLevel=%d\n", batt_volt, batt_percent);
+  if (debug_mode) Serial.printf("BatVoltage= %.1f, BattLevel=%d\n", batt_volt, batt_percent);
 
   // Clear the old values
   batt_sprite.fillSprite(erase_fill_colour);  // Clear the battery icon sprite
@@ -1146,7 +1147,7 @@ void sync_rtc_to_ntp(bool dst) {
   delay(1000);
 
   if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
+    if (debug_mode) Serial.println("Failed to obtain time");
     M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
     M5.Lcd.drawString("NTP Failed", ntp_msg_x, ntp_msg_y);
     return;
