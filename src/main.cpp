@@ -26,12 +26,12 @@
 // TODO   - Set LCD brightness
 
 // General defines
-#define sw_version               "v0.3.0"
+#define sw_version               "v0.4.0"
 #define TFT_BACKGND              TFT_BLACK
 #define reduce_bright_hrs_start  19  // Reduce LED and LCD brightness starting at 7pm
 #define reduce_bright_hrs_finish 7   // Increast LED and LCD brightness starting at 7am
-#define led_brightness_pc_high   70
-#define led_brightness_pc_low    5
+#define led_brightness_pc_high   80
+#define led_brightness_pc_low    30
 #define lcd_brightness_pc_high   60
 #define lcd_brightness_pc_low    30
 #define gmt_offset               10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
@@ -39,12 +39,15 @@
 
 // uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
 // #define UPDATE_SETTINGS
-#define temperature_offset 12.6  // Temperature offset for CO2 sensor based temperature sensor
+#define temperature_offset 9.0  // Temperature offset for CO2 sensor based temperature sensor
 #define altitude           88    // altitude in metres used for CO2 sensor
 
 // RGB LED defines
 #define LED_COUNT 10
 #define LED_PIN   25
+
+// LDR light sensor pin
+#define LDR_PIN 35
 
 // LCD text and graphics coordinates
 #define lcd_width  320
@@ -152,6 +155,7 @@ void display_co2_value(uint16_t co2, int32_t colour);
 void display_co2_units();
 void display_temp_humid(float temp, float humid);
 void co2_to_colour(uint16_t co2, uint32_t& led_colour, int32_t& lcd_colour, char* txt);
+uint16_t read_ldr(void);
 void set_rgb_led(uint8_t brightness, uint32_t colour);
 void save_co2_history(void);
 void main_display(void);
@@ -187,7 +191,6 @@ RunningAverage co2_minute_hist(co2_minute_hist_pts);  // Circular buffer for min
 RunningAverage co2_hour_hist(co2_hour_hist_pts);      // Circular buffer for hour CO2 samples
 
 // Global variables
-uint8_t led_brightness_percent = led_brightness_pc_high;
 uint8_t lcd_brightness_percent = lcd_brightness_pc_high;
 
 enum {
@@ -219,7 +222,6 @@ void setup(void) {
 
   M5.begin(cfg);
   M5.Lcd.setBrightness((lcd_brightness_percent * 255) / 100);  // LCD to 60% brightness
-  // M5.Power.setLed(255); // Core 2 green LED full brightness
 
   // Create battery icon sprite
   batt_sprite.createSprite(batt_spr_wdth, batt_spr_ht);
@@ -235,9 +237,34 @@ void setup(void) {
   gauge_ticks.createSprite(gauge_tick_spr_w, gauge_tick_spr_h);
   gauge_ticks.setPivot(1, rad_2 + gauge_tick_spr_h + 1);
 
+  // Setup ADC for LDR light sensor
+  analogSetWidth(9);
+  analogSetAttenuation(ADC_11db);  // 11dB max is 2600mV
+
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
-  set_rgb_led(led_brightness_percent, CRGB::Fuchsia);
+  set_rgb_led(read_ldr(), CRGB::Fuchsia);
+
+  auto spk_cfg = M5.Speaker.config();
+  spk_cfg.sample_rate = 192000;  // M5 Unified default = 44,100
+  M5.Speaker.config(spk_cfg);
+
+  M5.Speaker.begin();
+  // The setVolume function can be set the master volume in the range of 0-255.
+  // M5.Speaker.setVolume((30 * 255) / 100);  // Set volume to 30%. Breaks FastLED colour, unless put 1ms delay after `set_rgb_led`
+  M5.Speaker.setAllChannelVolume((35 * 255) / 100);
+
+  const uint8_t sin_wav[] = {128, 152, 176, 198, 218, 234, 245, 253, 255, 253, 245, 234, 218, 198, 176, 152, 128, 103, 79, 57, 37, 21, 10, 2, 0, 2, 10, 21, 37, 57, 79, 103};
+  // const uint16_t C4 = 261.626;
+  // const uint16_t E4 = 329.628;
+  // const uint16_t G4 = 391.995;
+  const uint16_t C6 = 1046.50;
+  // const uint16_t E6 = 1318.51;
+  const uint16_t G6 = 1567.98;
+  uint16_t chord_duration_ms = 200;
+  M5.Speaker.tone(C6, chord_duration_ms, 0, false, sin_wav, sizeof(sin_wav));
+  delay(250);
+  M5.Speaker.tone(G6, chord_duration_ms, 1, false, sin_wav, sizeof(sin_wav));
 
   // Start CO2 sensor and display sensor settings
   start_co2_sensor(true);
@@ -362,7 +389,7 @@ void main_display(void) {
 
   co2_to_colour(co2.co2_level, co2_led_colour, co2_lcd_colour, txt_msg);
   co2_lcd_colour2 = co2_lcd_colour;
-  set_rgb_led(led_brightness_percent, co2_led_colour);  // Neopixel RGB LED colour and 100% brightness
+  set_rgb_led(read_ldr(), co2_led_colour);  // Neopixel RGB LED colour and 100% brightness
 
 #if defined SENSOR_IS_SGP30
   // Don't blink the co2 value as it updates at 1Hz
@@ -861,10 +888,8 @@ void display_co2_effect(const char* effect, int32_t colour) {
 void set_lcd_led_brightness(void) {
   // Set RGB LED and LCD brightness based on time of day
   if (RTCtime.hours >= reduce_bright_hrs_start || RTCtime.hours <= reduce_bright_hrs_finish) {
-    led_brightness_percent = led_brightness_pc_low;
     lcd_brightness_percent = lcd_brightness_pc_low;
   } else {
-    led_brightness_percent = led_brightness_pc_high;
     lcd_brightness_percent = lcd_brightness_pc_high;
   }
   M5.Lcd.setBrightness((lcd_brightness_percent * 255) / 100);  // LCD to 60% brightness
@@ -879,13 +904,26 @@ void set_rgb_led(uint8_t brightness, uint32_t colour) {
   FastLED.setBrightness((brightness * 255) / 100);
   // M5 Core2 base has x10 LEDs around the base
 
-  if (brightness <= led_brightness_pc_low) {
-    fill_solid(leds, LED_COUNT, CRGB::Black);
-    leds[0] = colour;  // Top right LED
-    leds[9] = colour;  // Top left LED
-  } else
-    fill_solid(leds, LED_COUNT, colour);
+  // if (brightness <= led_brightness_pc_low) {
+  //   fill_solid(leds, LED_COUNT, CRGB::Black);
+  //   leds[0] = colour;  // Top right LED
+  //   leds[9] = colour;  // Top left LED
+  // } else
+  fill_solid(leds, LED_COUNT, colour);
   FastLED.show();
+}
+
+/*
+-----------------
+  Read LDR light sensor and convert to RGB LED brightness percent
+-----------------
+*/
+uint16_t read_ldr(void) {
+  int16_t adc_value;
+  adc_value = analogRead(LDR_PIN);
+  adc_value = (adc_value * 100) / 512 + led_brightness_pc_low;
+  if (adc_value > 100) adc_value = 100;
+  return adc_value;
 }
 
 /*
