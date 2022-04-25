@@ -1,3 +1,4 @@
+#include <DFRobot_VEML7700.h>
 #include <FastLED.h>
 #include <M5Unified.h>
 #include <WiFi.h>
@@ -13,29 +14,22 @@
 // TODO Check scaling of bargraph
 // TODO Save 24-hour history to SD card
 // TODO make DST a menu selection saved to EEPROM so don't need to recompile when DST changes
-// TODO add MENU to:
-// TODO   - Calibrate in 1 of 2 methods: Automatic Self-Calibration (ASC) + Set Forced Recalibration value (FRC)
-// TODO   - Enter temperature offset
-// TODO   - Enter altitude
-// TODO   - show software version
-// TODO   - show FRC calibration value
-// TODO   - Set screen rotation left/right
-// TODO   - Set LCD brightness
+// TODO add MENU system to set options
 
 // General defines
-#define sw_version            "v0.4.0"
+#define sw_version            "v0.5.0"
 #define TFT_BACKGND           TFT_BLACK
 #define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
 #define led_brightness_pc_low 20
-#define lcd_brightness_low    30
+#define lcd_brightness_low    50
 #define gmt_offset            10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
 #define ntp_url               "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
 
-// uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
+// Uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
 // #define UPDATE_SETTINGS
-#define temperature_offset 9.0  // Temperature offset for CO2 sensor based temperature sensor
+#define temperature_offset 10.0  // Temperature offset for CO2 sensor based temperature sensor
 #define altitude           88   // altitude in metres used for CO2 sensor
-bool debug_mode = true;         // Set true to output some serial debug text
+bool debug_mode = false;         // Set true to output some serial debug text
 
 // RGB LED defines
 #define LED_COUNT 10
@@ -150,8 +144,7 @@ void display_co2_value(uint16_t co2, int32_t colour);
 void display_co2_units();
 void display_temp_humid(float temp, float humid);
 void co2_to_colour(uint16_t co2, uint32_t& led_colour, int32_t& lcd_colour, char* txt);
-uint16_t ldr_to_led_brightness_pc(void);
-uint16_t ldr_to_lcd_brightness_pc(void);
+void lux_to_brightness(void);
 void set_rgb_led(uint8_t brightness, uint32_t colour);
 void save_co2_history(void);
 void main_display(void);
@@ -168,6 +161,7 @@ void draw_circular_gauge_scale(void);
 void draw_circular_gauge_pointer(uint16_t percent);
 
 // Object creation
+DFRobot_VEML7700 lux;
 CO2_generic co2;
 CRGB leds[LED_COUNT];                           // WS2812 RGB LED object
 TickTwo clock_display(display_time, 1000);      // Schedule time to display once per second
@@ -175,6 +169,7 @@ TickTwo batt_display(disp_batt_wrapper, 5000);  // Schedule display battery icon
 TickTwo co2_display(main_display, 500);         // Schedule CO2 display twice per second
 TickTwo co2_history(save_co2_history, 1000);    // Schedule save CO2 history every second
 TickTwo sim(sim_sensor_wrapper, 5000);          // Schedule simulation of the SCD-30 every 5 seconds
+TickTwo read_lux(lux_to_brightness, 5000);      // Schedule read of lux sensor and set LCD and RGB LED brightness
 m5::rtc_time_t RTCtime;
 m5::rtc_date_t RTCdate;
 M5Canvas batt_sprite(&M5.Lcd);                        // Sprite for battery icon and percentage text
@@ -195,6 +190,7 @@ enum {
 };
 uint8_t display_state = display_tem_hum;
 bool display_init = false;
+uint32_t led_brightness_pc = 0;
 
 /*
 -----------------
@@ -212,16 +208,14 @@ void setup(void) {
   cfg.external_rtc = false;      // default=false. use Unit RTC.
   cfg.led_brightness = 0;        // default= 0. Green LED brightness (0=off / 255=max) (※ not NeoPixel)
 
-  // Setup ADC for LDR light sensor
-  analogSetWidth(10);
-  analogSetAttenuation(ADC_11db);  // 11dB max is 2600mV
-
   M5.begin(cfg);
-  M5.Lcd.setBrightness(ldr_to_lcd_brightness_pc());  // Core2 LCD backlight brightness
+  M5.Lcd.setBrightness(180);  // Core2 LCD backlight brightness
+
+  lux.begin();
 
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
-  set_rgb_led(ldr_to_led_brightness_pc(), CRGB::Fuchsia);  // RGB LED brightness
+  set_rgb_led(100, CRGB::Fuchsia);  // RGB LED brightness to 100%
 
   // Create battery icon sprite
   batt_sprite.createSprite(batt_spr_wdth, batt_spr_ht);
@@ -237,16 +231,11 @@ void setup(void) {
   gauge_ticks.createSprite(gauge_tick_spr_w, gauge_tick_spr_h);
   gauge_ticks.setPivot(1, rad_2 + gauge_tick_spr_h + 1);
 
-  auto spk_cfg = M5.Speaker.config();
-  spk_cfg.sample_rate = 192000;  // M5 Unified default = 44,100
-  M5.Speaker.config(spk_cfg);
-
   M5.Speaker.begin();
   // The setVolume function can be set the master volume in the range of 0-255.
-  // M5.Speaker.setVolume((30 * 255) / 100);  // Set volume to 30%. Breaks FastLED colour, unless put 1ms delay after `set_rgb_led`
-  M5.Speaker.setAllChannelVolume((35 * 255) / 100);
+  M5.Speaker.setVolume((10 * 255) / 100);
+  // M5.Speaker.setAllChannelVolume((35 * 255) / 100);
 
-  const uint8_t sin_wav[] = {128, 152, 176, 198, 218, 234, 245, 253, 255, 253, 245, 234, 218, 198, 176, 152, 128, 103, 79, 57, 37, 21, 10, 2, 0, 2, 10, 21, 37, 57, 79, 103};
   // const uint16_t C4 = 261.626;
   // const uint16_t E4 = 329.628;
   // const uint16_t G4 = 391.995;
@@ -254,9 +243,9 @@ void setup(void) {
   // const uint16_t E6 = 1318.51;
   const uint16_t G6 = 1567.98;
   uint16_t chord_duration_ms = 200;
-  M5.Speaker.tone(C6, chord_duration_ms, 0, false, sin_wav, sizeof(sin_wav));
-  delay(250);
-  M5.Speaker.tone(G6, chord_duration_ms, 1, false, sin_wav, sizeof(sin_wav));
+  M5.Speaker.tone(C6, chord_duration_ms, 0, false);
+  // delay(250);
+  M5.Speaker.tone(G6, chord_duration_ms, 1, false);
 
   // Start CO2 sensor and display sensor settings
   start_co2_sensor(true);
@@ -265,7 +254,7 @@ void setup(void) {
   scd_x_settings(temperature_offset, altitude, true);  // Uncomment to update the settings one time, which get saved to SCD-x EEPROM
 #endif
 
-  // If no sensor detected, so switch to simulation mode
+  // If no sensor detected, switch to simulation mode
   if (co2.simulate_co2) {
     if (debug_mode) Serial.printf("%s CO2 sensor NOT connected, switching to simulation mode\n", co2_sensor_type_str);
     co2.co2_level = 400;
@@ -296,6 +285,7 @@ void setup(void) {
   batt_display.start();
   co2_history.start();
   co2_display.start();
+  read_lux.start();
 }
 
 /*
@@ -312,10 +302,11 @@ void loop(void) {
   } else
     co2_display.update();
 
+  // Scheduled tasks update
   clock_display.update();
   batt_display.update();
   co2_history.update();
-  // TODO schedule SGP-30 baseline read and store to ESP32 EEPROM once per hour
+  read_lux.update();
 
   // Enter calibration mode after BtnB held for 3 seconds
   if (M5.BtnC.pressedFor(5000)) {
@@ -381,8 +372,7 @@ void main_display(void) {
 
   co2_to_colour(co2.co2_level, co2_led_colour, co2_lcd_colour, txt_msg);
   co2_lcd_colour2 = co2_lcd_colour;
-  set_rgb_led(ldr_to_led_brightness_pc(), co2_led_colour);  // Neopixel RGB LED colour and brightness
-  M5.Lcd.setBrightness(ldr_to_lcd_brightness_pc());         // Core2 LCD backlight brightness
+  set_rgb_led(led_brightness_pc, co2_led_colour);  // Neopixel RGB LED colour and brightness
 
 #if defined SENSOR_IS_SGP30
   // Don't blink the co2 value as it updates at 1Hz
@@ -898,34 +888,42 @@ void set_rgb_led(uint8_t brightness_pc, uint32_t colour) {
 
 /*
 -----------------
-  Read LDR light sensor and convert to RGB LED brightness percent
+  Readl VEML7700 lux sensor, and set LCD and RGB LED brightness based on ambient light level
 -----------------
 */
-uint16_t ldr_to_led_brightness_pc(void) {
-  int16_t adc_value;
+void lux_to_brightness(void) {
+  float lux_float;
+  uint32_t lux_int;
+  uint8_t lcd_brightness_pc = 0;
 
-  adc_value = analogRead(LDR_PIN);  // Max value at 10-bit = 1024
-  if (debug_mode) Serial.printf("LED ADC=%d, ", adc_value);
-  adc_value = constrain(adc_value, 0, max_adc_value);
-  adc_value = map(adc_value, 0, max_adc_value, led_brightness_pc_low, 100);  // map(value, fromLow, fromHigh, toLow, toHigh)
-  if (debug_mode) Serial.printf("brightness %%=%d\n", adc_value);
-  return adc_value;
-}
+  lux.getALSLux(lux_float);
+  // Auto ranging lux, can take up to 5 or 6 seconds in very low light
+  // lux.getAutoALSLux(lux_float);
 
-/*
------------------
-  Read LDR light sensor and convert to Core2 LCD brightness 0-255
------------------
-*/
-uint16_t ldr_to_lcd_brightness_pc(void) {
-  int16_t adc_value;
+  lux_int = (uint16_t)lux_float;
 
-  adc_value = analogRead(LDR_PIN);  // Max value at 10-bit = 1024
-  if (debug_mode) Serial.printf("LCD ADC=%d, ", adc_value);
-  adc_value = constrain(adc_value, 0, max_adc_value);
-  adc_value = map(adc_value, 0, max_adc_value, lcd_brightness_low, 255);  // map(value, fromLow, fromHigh, toLow, toHigh)
-  if (debug_mode) Serial.printf("brightness=%d\n", adc_value);
-  return adc_value;
+  if (lux_int < 6) {
+    led_brightness_pc = 5;
+    lcd_brightness_pc = 30;
+  } else if (lux_int < 40) {
+    led_brightness_pc = 50;
+    lcd_brightness_pc = 50;
+  } else if (lux_int < 100) {
+    led_brightness_pc = 70;
+    lcd_brightness_pc = 70;
+  } else {
+    led_brightness_pc = 100;
+    lcd_brightness_pc = 100;
+  }
+
+  if (debug_mode) Serial.printf("Lux=%d, Brightness: LED=%d%%, LCD=%d%%\n\n", lux_int, led_brightness_pc, lcd_brightness_pc);
+
+  // Set RGB LED brightness
+  FastLED.setBrightness((led_brightness_pc * 255) / 100);
+  FastLED.show();
+
+  // Set M5 Stack Core2 LCD brightness
+  M5.Lcd.setBrightness((lcd_brightness_pc * 255) / 100);  // Core2 LCD backlight brightness
 }
 
 /*
@@ -1139,6 +1137,31 @@ void sync_rtc_to_ntp(bool dst) {
 #define ntp_msg "Read NTP time"
   M5.Lcd.setTextPadding(M5.Lcd.textWidth(ntp_msg));
   M5.Lcd.drawString(ntp_msg, ntp_msg_x, ntp_msg_y);
+
+  ///
+  // Alternative from: https://github.com/m5stack/M5Unified/blob/master/examples/Basic/Rtc/Rtc.ino
+  // See pull request: https://github.com/m5stack/M5Unified/pull/20
+  //
+  /*
+    WiFi.begin( WIFI_SSID, WIFI_PASSWORD );
+    configTzTime(NTP_TIMEZONE, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      Serial.print('.');
+      delay(500);
+    }
+    Serial.println("\r\n WiFi Connected.");
+    time_t t;
+    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET)
+    {
+      Serial.print('.');
+      delay(1000);
+    }
+    Serial.println("\r\n NTP Connected.");
+    t = time(nullptr)+1; // Advance one second.
+    while (t > time(nullptr));  /// Synchronization in seconds
+    M5.Rtc.setDateTime( localtime( &t ) );
+  //*/
 
   // Set timezone and get the time from NTP server. Sets ESP32 internal RTC
   configTime(gmtOffset_sec, daylightOffset_sec, ntp_url);
