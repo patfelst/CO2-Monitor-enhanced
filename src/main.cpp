@@ -17,7 +17,7 @@
 // TODO add MENU system to set options
 
 // General defines
-#define sw_version            "v0.5.0"
+#define sw_version            "v0.5.1"
 #define TFT_BACKGND           TFT_BLACK
 #define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
 #define led_brightness_pc_low 20
@@ -28,7 +28,7 @@
 // Uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
 // #define UPDATE_SETTINGS
 #define temperature_offset 10.0  // Temperature offset for CO2 sensor based temperature sensor
-#define altitude           88   // altitude in metres used for CO2 sensor
+#define altitude           88    // altitude in metres used for CO2 sensor
 bool debug_mode = false;         // Set true to output some serial debug text
 
 // RGB LED defines
@@ -895,6 +895,7 @@ void lux_to_brightness(void) {
   float lux_float;
   uint32_t lux_int;
   uint8_t lcd_brightness_pc = 0;
+  char lux_str[20] = "";
 
   lux.getALSLux(lux_float);
   // Auto ranging lux, can take up to 5 or 6 seconds in very low light
@@ -902,7 +903,7 @@ void lux_to_brightness(void) {
 
   lux_int = (uint16_t)lux_float;
 
-  if (lux_int < 6) {
+  if (lux_int < 3) {
     led_brightness_pc = 5;
     lcd_brightness_pc = 30;
   } else if (lux_int < 40) {
@@ -924,6 +925,18 @@ void lux_to_brightness(void) {
 
   // Set M5 Stack Core2 LCD brightness
   M5.Lcd.setBrightness((lcd_brightness_pc * 255) / 100);  // Core2 LCD backlight brightness
+
+  // Display lux and brightness on LCD
+  static bool colour_toggle = false;
+  colour_toggle = !colour_toggle;
+  const int color_true = M5.Lcd.color565(255, 255, 0); // Yelllow
+  const int color_false = M5.Lcd.color565(255, 145, 0); // Orange
+  M5.Lcd.setTextColor(colour_toggle ? color_true : color_false, TFT_BLACK);
+  M5.Lcd.setTextDatum(top_right);
+  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
+  M5.Lcd.setTextPadding(110);
+  sprintf(lux_str, "%d/%3d%%", lux_int, led_brightness_pc);
+  M5.Lcd.drawString(lux_str, M5.Lcd.width() - 96, time_txt_y);
 }
 
 /*
