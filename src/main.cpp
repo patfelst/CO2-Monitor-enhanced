@@ -2,6 +2,7 @@
 #include <FastLED.h>
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <esp_sntp.h>
 
 #include "DSEG7Modern40.h"
 #include "DSEG7ModernBold60.h"
@@ -17,19 +18,17 @@
 // TODO add MENU system to set options
 
 // General defines
-#define sw_version            "v0.5.1"
+#define sw_version            "v0.6.0"
 #define TFT_BACKGND           TFT_BLACK
 #define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
 #define led_brightness_pc_low 20
 #define lcd_brightness_low    50
-#define gmt_offset            10.5            // timezone offset for NTP sync. Adelaide South Australia = +10.5 in DST, +9.5 otherwise
-#define ntp_url               "pool.ntp.org"  // Also try "0.au.pool.ntp.org"
 
 // Uncomment this to apply temperature offset and altitude, only do once, then re-flash with this commented out
 // #define UPDATE_SETTINGS
 #define temperature_offset 10.0  // Temperature offset for CO2 sensor based temperature sensor
 #define altitude           88    // altitude in metres used for CO2 sensor
-bool debug_mode = false;         // Set true to output some serial debug text
+bool debug_mode = true;          // Set true to output some serial debug text
 
 // RGB LED defines
 #define LED_COUNT 10
@@ -136,7 +135,7 @@ bool debug_mode = false;         // Set true to output some serial debug text
 void start_co2_sensor(bool);
 void display_time(void);
 bool connect_wifi(uint8_t max_tries = 15);
-void sync_rtc_to_ntp(bool dst);
+void sync_rtc_to_ntp(void);
 void disp_batt_wrapper(void);
 void disp_batt_symbol(uint16_t batt_x, uint16_t batt_y, bool disp_volts);
 void display_co2_effect(const char* effect, int32_t colour);
@@ -212,6 +211,7 @@ void setup(void) {
   M5.Lcd.setBrightness(180);  // Core2 LCD backlight brightness
 
   lux.begin();
+  // lux.setIntegrationTime(DFRobot_VEML7700::ALS_INTEGRATION_400ms);
 
   // Setup RGB LED
   FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, LED_COUNT);
@@ -321,7 +321,7 @@ void loop(void) {
     // Connect to WiFi
     if (connect_wifi()) {
       delay(500);
-      sync_rtc_to_ntp(true);
+      sync_rtc_to_ntp();
       WiFi.disconnect(true);  // Disconnect wifi
       WiFi.mode(WIFI_OFF);    // Set the wifi mode to off
     }
@@ -893,7 +893,6 @@ void set_rgb_led(uint8_t brightness_pc, uint32_t colour) {
 */
 void lux_to_brightness(void) {
   float lux_float;
-  uint32_t lux_int;
   uint8_t lcd_brightness_pc = 0;
   char lux_str[20] = "";
 
@@ -901,15 +900,13 @@ void lux_to_brightness(void) {
   // Auto ranging lux, can take up to 5 or 6 seconds in very low light
   // lux.getAutoALSLux(lux_float);
 
-  lux_int = (uint16_t)lux_float;
-
-  if (lux_int < 3) {
+  if (lux_float < 3.0) {
     led_brightness_pc = 5;
     lcd_brightness_pc = 30;
-  } else if (lux_int < 40) {
+  } else if (lux_float < 40.0) {
     led_brightness_pc = 50;
     lcd_brightness_pc = 50;
-  } else if (lux_int < 100) {
+  } else if (lux_float < 100.0) {
     led_brightness_pc = 70;
     lcd_brightness_pc = 70;
   } else {
@@ -917,7 +914,7 @@ void lux_to_brightness(void) {
     lcd_brightness_pc = 100;
   }
 
-  if (debug_mode) Serial.printf("Lux=%d, Brightness: LED=%d%%, LCD=%d%%\n\n", lux_int, led_brightness_pc, lcd_brightness_pc);
+  if (debug_mode) Serial.printf("Lux=%.3f, Brightness: LED=%d%%, LCD=%d%%\n\n", lux_float, led_brightness_pc, lcd_brightness_pc);
 
   // Set RGB LED brightness
   FastLED.setBrightness((led_brightness_pc * 255) / 100);
@@ -929,13 +926,13 @@ void lux_to_brightness(void) {
   // Display lux and brightness on LCD
   static bool colour_toggle = false;
   colour_toggle = !colour_toggle;
-  const int color_true = M5.Lcd.color565(255, 255, 0); // Yelllow
-  const int color_false = M5.Lcd.color565(255, 145, 0); // Orange
+  const int color_true = M5.Lcd.color565(255, 255, 0);   // Yelllow
+  const int color_false = M5.Lcd.color565(255, 145, 0);  // Orange
   M5.Lcd.setTextColor(colour_toggle ? color_true : color_false, TFT_BLACK);
   M5.Lcd.setTextDatum(top_right);
   M5.Lcd.setFont(&fonts::FreeSans12pt7b);
   M5.Lcd.setTextPadding(110);
-  sprintf(lux_str, "%d/%3d%%", lux_int, led_brightness_pc);
+  sprintf(lux_str, "%.1f/%3d%%", lux_float, led_brightness_pc);
   M5.Lcd.drawString(lux_str, M5.Lcd.width() - 96, time_txt_y);
 }
 
@@ -1132,85 +1129,55 @@ bool connect_wifi(uint8_t max_tries) {
 /*
 -----------------
   Configures the timezone, queries NTP for data and time, and sets RTC chip with the result
-  dst - daylight savings is true or false
 -----------------
 */
-void sync_rtc_to_ntp(bool dst) {
-  // Adelaide, South Australia timezone is +10.5 hrs
-  const long gmtOffset_sec = (long)(gmt_offset * 60.0 * 60.0);
-  struct tm timeinfo;
+void sync_rtc_to_ntp(void) {
   char time_txt[80] = "";
-
-  int daylightOffset_sec = 0;
-  if (dst) daylightOffset_sec = 3600;
+  struct tm* timeinfo;
 
   M5.Lcd.setTextDatum(top_center);
   M5.Lcd.setFont(&fonts::FreeSans12pt7b);
   M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-#define ntp_msg "Read NTP time"
-  M5.Lcd.setTextPadding(M5.Lcd.textWidth(ntp_msg));
-  M5.Lcd.drawString(ntp_msg, ntp_msg_x, ntp_msg_y);
+  M5.Lcd.setTextPadding(M5.Lcd.textWidth("Syncing to NTP time"));
+  M5.Lcd.drawString("Syncing to NTP time", ntp_msg_x, ntp_msg_y);
 
-  ///
-  // Alternative from: https://github.com/m5stack/M5Unified/blob/master/examples/Basic/Rtc/Rtc.ino
+  // See example: https://github.com/m5stack/M5Unified/blob/master/examples/Basic/Rtc/Rtc.ino
   // See pull request: https://github.com/m5stack/M5Unified/pull/20
   //
-  /*
-    WiFi.begin( WIFI_SSID, WIFI_PASSWORD );
-    configTzTime(NTP_TIMEZONE, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
-    while (WiFi.status() != WL_CONNECTED)
-    {
-      Serial.print('.');
-      delay(500);
-    }
-    Serial.println("\r\n WiFi Connected.");
-    time_t t;
-    while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET)
-    {
-      Serial.print('.');
-      delay(1000);
-    }
-    Serial.println("\r\n NTP Connected.");
-    t = time(nullptr)+1; // Advance one second.
-    while (t > time(nullptr));  /// Synchronization in seconds
-    M5.Rtc.setDateTime( localtime( &t ) );
-  //*/
+  // Also try "0.au.pool.ntp.org"
+  // configTzTime("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "pool.ntp.org");  // ACST = Australian Central Standard Time (timezone)
+  configTzTime("ACST-9:30ACDT,M10.1.0,M4.1.0/3", "0.au.pool.ntp.org");  // ACST = Australian Central Standard Time (timezone)
 
-  // Set timezone and get the time from NTP server. Sets ESP32 internal RTC
-  configTime(gmtOffset_sec, daylightOffset_sec, ntp_url);
+  // Epoch time variable, i.e. number of seconds since 1-1-1970 UTC
+  time_t t;
 
-  // Without a delay of >= 500, NTP fails randomly. No idea why
-  delay(1000);
+  // Wait until NTP sync has finished. Sets ESP32 internal RTC
+  Serial.println("Syncing with NTP time");
+  // Set location where "connecting..." dots will appear
+  M5.Lcd.setCursor(110, 160);
+  M5.Lcd.setFont(&fonts::FreeSans18pt7b); // Set larger font to display probress dots "....""
 
-  if (!getLocalTime(&timeinfo)) {
-    if (debug_mode) Serial.println("Failed to obtain time");
-    M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
-    M5.Lcd.drawString("NTP Failed", ntp_msg_x, ntp_msg_y);
-    return;
+  while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
+    Serial.print('.');
+    M5.Lcd.print(".");
+    delay(1000);
   }
-  // See https://www.tutorialspoint.com/cplusplus/cpp_date_time.htm
-  // See https://www.cplusplus.com/reference/ctime/strftime/
-  strftime(time_txt, 80, "%A %e-%m-%Y, %H:%M:%S", &timeinfo);
-  log_d("getLocalTime()=%s", time_txt);
+  Serial.println("\r\n NTP Connected.");
+  t = time(nullptr) + 1;  // Advance one second
+  while (t > time(nullptr));                            /// Synchronization in seconds
+  timeinfo = localtime(&t);      // Convert epoch time to a "tm" structure
+  M5.Rtc.setDateTime(timeinfo);  // Writes the date and time to the Core2's external RTC chip
 
-  // Debug text for date and time
-  // log_d("timeinfo: tm_mday=%d tm_mon=%d tm_wday=%d tm_year=%d",
-  //       (uint8_t)timeinfo.tm_mday, (uint8_t)(timeinfo.tm_mon + 1), (uint8_t)timeinfo.tm_wday, (uint16_t)(timeinfo.tm_year + 1900));
-  // log_d("timeinfo: tm_hour=%d tm_min=%d tm_sec=%d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+#if (CORE_DEBUG_LEVEL == 4)
+  strftime(time_txt, 80, "%A %e-%m-%Y, %H:%M:%S", timeinfo);
+  log_d("NTP time is: %s", time_txt);
 
-  // Convert tm time structure into RTC structure
-  RTCtime.hours = (uint8_t)timeinfo.tm_hour;
-  RTCtime.minutes = (uint8_t)timeinfo.tm_min;
-  RTCtime.seconds = (uint8_t)timeinfo.tm_sec;
-  M5.Rtc.setTime(&RTCtime);  // and writes the set time to the real time clock
+  log_d("timeinfo: tm_mday=%d tm_mon=%d tm_wday=%d tm_year=%d",
+        (uint8_t)timeinfo->tm_hour, (uint8_t)(timeinfo->tm_mon + 1), (uint8_t)timeinfo->tm_wday, (uint16_t)(timeinfo->tm_year + 1900));
+  log_d("timeinfo: tm_hour=%d tm_min=%d tm_sec=%d\n", timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+#endif
 
-  // Set the date
-  RTCdate.date = (uint8_t)timeinfo.tm_mday;
-  RTCdate.month = (uint8_t)(timeinfo.tm_mon + 1);
-  RTCdate.weekDay = (uint8_t)timeinfo.tm_wday;
-  RTCdate.year = (uint16_t)(timeinfo.tm_year + 1900);
-  M5.Rtc.setDate(&RTCdate);
-
+  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
   M5.Lcd.setTextColor(TFT_GREEN, TFT_BLACK);
   M5.Lcd.drawString("RTC synced to NTP", ntp_msg_x, ntp_msg_y);
 }
@@ -1223,29 +1190,12 @@ void sync_rtc_to_ntp(bool dst) {
 void display_time(void) {
 #define str_size 50
   char time_str[str_size];
-  struct tm timeinfo;
 
   // Read time from real-time clock
-  M5.Rtc.getTime(&RTCtime);
-  M5.Rtc.getDate(&RTCdate);
-  // sprintf(time_str, "%2d-%02d-%d, %02d:%02d:%02d",
-  //         RTCdate.Date, RTCdate.Month, RTCdate.Year, RTCtime.Hours, RTCtime.Minutes, RTCtime.Seconds);
-  // log_d("%s", time_str);
-
-  // Convert tm time structure into RTC structure
-  timeinfo.tm_hour = RTCtime.hours;
-  timeinfo.tm_min = RTCtime.minutes;
-  timeinfo.tm_sec = RTCtime.seconds;
-
-  // Set the date
-  timeinfo.tm_mday = RTCdate.date;
-  timeinfo.tm_mon = RTCdate.month - 1;
-  timeinfo.tm_wday = RTCdate.weekDay;
-  timeinfo.tm_year = RTCdate.year - 1900;
+  auto dt = M5.Rtc.getDateTime();
 
   // Display date
-  // See https://www.cplusplus.com/reference/ctime/strftime/
-  strftime(time_str, str_size, "%e-%m-%g", &timeinfo);
+  sprintf(time_str, "%02d-%02d-%04d", dt.date.date, dt.date.month, dt.date.year);
   M5.Lcd.setTextDatum(time_align);
   M5.Lcd.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
   M5.Lcd.setFont(&fonts::FreeSans12pt7b);
@@ -1253,7 +1203,7 @@ void display_time(void) {
   // M5.Lcd.drawString(time_str, date_txt_x, date_txt_y);
 
   // Display time
-  strftime(time_str, str_size, "%H:%M:%S", &timeinfo);
+  sprintf(time_str, "%02d:%02d:%02d", dt.time.hours, dt.time.minutes, dt.time.seconds);
   M5.Lcd.drawString(time_str, time_txt_x, time_txt_y);
 }
 
