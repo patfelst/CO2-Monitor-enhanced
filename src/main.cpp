@@ -14,11 +14,10 @@
 
 // TODO Check scaling of bargraph
 // TODO Save 24-hour history to SD card
-// TODO make DST a menu selection saved to EEPROM so don't need to recompile when DST changes
 // TODO add MENU system to set options
 
 // General defines
-#define sw_version            "v0.6.0"
+#define sw_version            "v0.6.1"
 #define TFT_BACKGND           TFT_BLACK
 #define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
 #define led_brightness_pc_low 20
@@ -1193,6 +1192,8 @@ void display_time(void) {
 
   // Read time from real-time clock
   auto dt = M5.Rtc.getDateTime();
+  RTCtime.seconds = dt.time.seconds; // Pass the time to the global var RTCtime
+  RTCtime.minutes = dt.time.minutes;  // Pass the time to the global var RTCtime
 
   // Display date
   sprintf(time_str, "%02d-%02d-%04d", dt.date.date, dt.date.month, dt.date.year);
