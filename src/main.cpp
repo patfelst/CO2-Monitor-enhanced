@@ -17,7 +17,8 @@
 // TODO add MENU system to set options
 
 // General defines
-#define sw_version            "v0.6.1"
+#define sw_version "v0.7.0"
+bool debug_mode = false;  // Set true to output some serial debug text
 #define TFT_BACKGND           TFT_BLACK
 #define max_adc_value         110  // max ADC value corresponds to max LCD and LED brightness
 #define led_brightness_pc_low 20
@@ -27,7 +28,6 @@
 // #define UPDATE_SETTINGS
 #define temperature_offset 10.0  // Temperature offset for CO2 sensor based temperature sensor
 #define altitude           88    // altitude in metres used for CO2 sensor
-bool debug_mode = true;          // Set true to output some serial debug text
 
 // RGB LED defines
 #define LED_COUNT 10
@@ -142,7 +142,8 @@ void display_co2_value(uint16_t co2, int32_t colour);
 void display_co2_units();
 void display_temp_humid(float temp, float humid);
 void co2_to_colour(uint16_t co2, uint32_t& led_colour, int32_t& lcd_colour, char* txt);
-void lux_to_brightness(void);
+void read_lux_sensor(void);
+void display_lux_val();
 void set_rgb_led(uint8_t brightness, uint32_t colour);
 void save_co2_history(void);
 void main_display(void);
@@ -167,7 +168,7 @@ TickTwo batt_display(disp_batt_wrapper, 5000);  // Schedule display battery icon
 TickTwo co2_display(main_display, 500);         // Schedule CO2 display twice per second
 TickTwo co2_history(save_co2_history, 1000);    // Schedule save CO2 history every second
 TickTwo sim(sim_sensor_wrapper, 5000);          // Schedule simulation of the SCD-30 every 5 seconds
-TickTwo read_lux(lux_to_brightness, 5000);      // Schedule read of lux sensor and set LCD and RGB LED brightness
+TickTwo read_lux(read_lux_sensor, 5000);        // Schedule read of lux sensor and set LCD and RGB LED brightness
 m5::rtc_time_t RTCtime;
 m5::rtc_date_t RTCdate;
 M5Canvas batt_sprite(&M5.Lcd);                        // Sprite for battery icon and percentage text
@@ -184,11 +185,14 @@ enum {
   display_hist_raw,
   display_hist_minute,
   display_hist_hour,
+  display_lux,
   display_settings,
 };
 uint8_t display_state = display_tem_hum;
 bool display_init = false;
 uint32_t led_brightness_pc = 0;
+uint8_t lcd_brightness_pc = 0;
+float lux_float;
 
 /*
 -----------------
@@ -307,7 +311,7 @@ void loop(void) {
   co2_history.update();
   read_lux.update();
 
-  // Enter calibration mode after BtnB held for 3 seconds
+  // Enter calibration mode after BtnB held for 5 seconds
   if (M5.BtnC.pressedFor(5000)) {
     scd_x_forced_cal(425);  // We just assume outdoor "fresh air" is 425 ppm, it will be pretty close
     display_state = display_tem_hum;
@@ -432,6 +436,14 @@ void main_display(void) {
       display_co2_value(co2.co2_level, co2_lcd_colour);
       display_temp_humid(co2.temperature, co2.humidity);
       display_co2_effect(txt_msg, co2_lcd_colour2);
+      break;
+
+    case display_lux:
+      if (display_init) {
+        display_init = false;
+        M5.Lcd.clear();
+      }
+      display_lux_val();
       break;
 
     case dispaly_gauge:
@@ -887,25 +899,78 @@ void set_rgb_led(uint8_t brightness_pc, uint32_t colour) {
 
 /*
 -----------------
-  Readl VEML7700 lux sensor, and set LCD and RGB LED brightness based on ambient light level
+  Display lux sensor value
 -----------------
 */
-void lux_to_brightness(void) {
-  float lux_float;
-  uint8_t lcd_brightness_pc = 0;
-  char lux_str[20] = "";
+#define lux_lev_1  3.0
+#define lux_lev_2  40.0
+#define lux_lev_3  100.0
 
+void display_lux_val() {
+  char lux_str[40] = "";
+  int32_t x = 10;
+  int32_t y = 50;
+
+  // Display lux and brightness on LCD
+  static bool colour_toggle = false;
+  colour_toggle = !colour_toggle;
+  // const int color_true = M5.Lcd.color565(255, 255, 0);   // Yelllow
+  // const int color_false = M5.Lcd.color565(255, 145, 0);  // Orange
+  const int color_true = TFT_WHITE;
+  const int color_false = TFT_GREEN;
+
+  M5.Lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
+  M5.Lcd.setTextDatum(top_left);
+  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
+  M5.Lcd.setTextPadding(110);
+
+  M5.Lcd.drawString("Lux:", x, y);
+  y += 27;
+  M5.Lcd.drawString("LED brightness:", x, y);
+  y += 27;
+  M5.Lcd.drawString("LCD brightness:", x, y);
+  y += 50;
+  M5.Lcd.setTextColor(TFT_WHITE, TFT_DARKGRAY);
+  M5.Lcd.drawString("Lux levels", x, y);
+  y += 27;
+  sprintf(lux_str, "%.0f--%.0f--%.0f", lux_lev_1, lux_lev_2, lux_lev_3);
+  M5.Lcd.setTextColor(TFT_LIGHTGRAY, TFT_BLACK);
+  M5.Lcd.drawString(lux_str, x, y);
+
+  y = 50;
+  x = M5.Lcd.width();
+  M5.Lcd.setTextDatum(top_right);
+  M5.Lcd.setTextColor(colour_toggle ? color_true : color_false, TFT_BLACK);
+
+  sprintf(lux_str, "%.1f", lux_float);
+  M5.Lcd.drawString(lux_str, x, y);
+
+  y += 27;
+  sprintf(lux_str, "%3d%%", led_brightness_pc);
+  M5.Lcd.drawString(lux_str, x, y);
+
+  y += 27;
+  sprintf(lux_str, "%3d%%", lcd_brightness_pc);
+  M5.Lcd.drawString(lux_str, x, y);
+}
+
+/*
+-----------------
+  Read VEML7700 lux sensor and set LED and LCD brightness
+-----------------
+*/
+void read_lux_sensor(void) {
   lux.getALSLux(lux_float);
   // Auto ranging lux, can take up to 5 or 6 seconds in very low light
   // lux.getAutoALSLux(lux_float);
 
-  if (lux_float < 3.0) {
+  if (lux_float < lux_lev_1) {
     led_brightness_pc = 5;
     lcd_brightness_pc = 30;
-  } else if (lux_float < 40.0) {
+  } else if (lux_float < lux_lev_2) {
     led_brightness_pc = 50;
     lcd_brightness_pc = 50;
-  } else if (lux_float < 100.0) {
+  } else if (lux_float < lux_lev_3) {
     led_brightness_pc = 70;
     lcd_brightness_pc = 70;
   } else {
@@ -921,18 +986,6 @@ void lux_to_brightness(void) {
 
   // Set M5 Stack Core2 LCD brightness
   M5.Lcd.setBrightness((lcd_brightness_pc * 255) / 100);  // Core2 LCD backlight brightness
-
-  // Display lux and brightness on LCD
-  static bool colour_toggle = false;
-  colour_toggle = !colour_toggle;
-  const int color_true = M5.Lcd.color565(255, 255, 0);   // Yelllow
-  const int color_false = M5.Lcd.color565(255, 145, 0);  // Orange
-  M5.Lcd.setTextColor(colour_toggle ? color_true : color_false, TFT_BLACK);
-  M5.Lcd.setTextDatum(top_right);
-  M5.Lcd.setFont(&fonts::FreeSans12pt7b);
-  M5.Lcd.setTextPadding(110);
-  sprintf(lux_str, "%.1f/%3d%%", lux_float, led_brightness_pc);
-  M5.Lcd.drawString(lux_str, M5.Lcd.width() - 96, time_txt_y);
 }
 
 /*
@@ -1154,7 +1207,7 @@ void sync_rtc_to_ntp(void) {
   Serial.println("Syncing with NTP time");
   // Set location where "connecting..." dots will appear
   M5.Lcd.setCursor(110, 160);
-  M5.Lcd.setFont(&fonts::FreeSans18pt7b); // Set larger font to display probress dots "....""
+  M5.Lcd.setFont(&fonts::FreeSans18pt7b);  // Set larger font to display probress dots "....""
 
   while (sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET) {
     Serial.print('.');
@@ -1163,7 +1216,8 @@ void sync_rtc_to_ntp(void) {
   }
   Serial.println("\r\n NTP Connected.");
   t = time(nullptr) + 1;  // Advance one second
-  while (t > time(nullptr));                            /// Synchronization in seconds
+  while (t > time(nullptr))
+    ;                            /// Synchronization in seconds
   timeinfo = localtime(&t);      // Convert epoch time to a "tm" structure
   M5.Rtc.setDateTime(timeinfo);  // Writes the date and time to the Core2's external RTC chip
 
@@ -1192,7 +1246,7 @@ void display_time(void) {
 
   // Read time from real-time clock
   auto dt = M5.Rtc.getDateTime();
-  RTCtime.seconds = dt.time.seconds; // Pass the time to the global var RTCtime
+  RTCtime.seconds = dt.time.seconds;  // Pass the time to the global var RTCtime
   RTCtime.minutes = dt.time.minutes;  // Pass the time to the global var RTCtime
 
   // Display date
